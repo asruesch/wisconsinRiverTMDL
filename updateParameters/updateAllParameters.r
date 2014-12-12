@@ -6,9 +6,12 @@ wetland_geometry_file = "T:/Projects/Wisconsin_River/GIS_Datasets/wetlands/wetla
 pond_geometry_file = "T:/Projects/Wisconsin_River/GIS_Datasets/ponds/pond_geometry.csv"
 reservoir_parameter_file = "T:/Projects/Wisconsin_River/GIS_Datasets/hydrology/dams_parameters.csv"
 gw_parameter_file = "T:/Projects/Wisconsin_River/GIS_Datasets/groundWater/alphaBflowSubbasin_lookup.csv"
+op_db_file = "T:/Projects/Wisconsin_River/Model_Inputs/SWAT_Inputs/LandCoverLandManagement/OpSchedules_fert_3Cuts_later.mdb"
+lu_op_xwalk_file = "T:/Projects/Wisconsin_River/Model_Inputs/SWAT_Inputs/LandCoverLandManagement/landuse_operation_crosswalk.csv"
+background_p_file = "T:/Projects/Wisconsin_River/GIS_Datasets/groundWater/phosphorus/background_P_from_EPZ.txt"
+soil_p_file = "T:/Projects/Wisconsin_River/GIS_Datasets/Soil_Phosphorus/soil_phosphorus_by_subbasin.txt"
 
 #UPDATE SWAT RESERVOIR PARAMETERS 
-
 reservoir_parameters = read.csv(reservoir_parameter_file)
 
 inDb = paste(projectDir, "/", basename(projectDir), ".mdb", sep="")
@@ -19,7 +22,7 @@ resData = sqlQuery(con, "SELECT * FROM res")
 for (row in 1:nrow(reservoir_parameters)) {
 	query = paste(
 		"UPDATE res ",
-		"SET RES_ESA = ", reservoir_parameters$res_psa[row], ",",
+		"SET RES_ESA = ", reservoir_parameters$res_psa[row] * 1.5, ",",
 		"RES_EVOL = ", reservoir_parameters$res_evol[row], ",",
 		"RES_PSA = ", reservoir_parameters$res_psa[row], ",",
 		"RES_PVOL = ", reservoir_parameters$res_pvol[row], ",",
@@ -32,14 +35,47 @@ for (row in 1:nrow(reservoir_parameters)) {
 
 close(con)
 
+#UPDATE SWAT SOIL PHOSPHORUS PARAMETER
+soil_p = read.table(soil_p_file, header = T)
+
+inDb = paste(projectDir, "/", basename(projectDir), ".mdb", sep="")
+con = odbcConnectAccess(inDb)
+
+for (sb in soil_p$Subbasin){   
+    soilp_query = paste(
+        "UPDATE chm",
+        "SET SOL_LABP1 = ", soil_p$SOLP[which(soil_p$Subbasin == sb)], ",",
+        "SOL_ORGP1 =", soil_p$ORGP[which(soil_p$Subbasin == sb)],
+        "WHERE SUBBASIN =", sb, "AND LANDUSE NOT IN",
+        "('BARR','FRSD', 'WATR', 'URML', 'RNGB','RNGE','WETF', 'WETN','HAY');"
+        )   
+    stdout = sqlQuery(con, soilp_query)
+}
+close(con)
+
+#UPDATE SWAT GROUNDWATER PHOSPHORUS PARAMETER
+background_p = read.table(background_p_file, header = T)
+
+inDb = paste(projectDir, "/", basename(projectDir), ".mdb", sep="")
+con = odbcConnectAccess(inDb)
+
+for (rw in background_p$ID){
+    gwp_query = paste(
+        "UPDATE gw ",
+        "SET GWSOLP = ", background_p$layer[which(background_p$ID == rw)],
+        " WHERE SUBBASIN = ", rw, ";",
+        sep = ''
+        )   
+    stdout = sqlQuery(con, gwp_query)
+}
+close(con)
+
 #UPDATE SWAT POND PARAMETERS
 
 pond_geometry = read.csv(pond_geometry_file)
 
 inDb = paste(projectDir, "/", basename(projectDir), ".mdb", sep="")
 con = odbcConnectAccess(inDb)
-
-pndData = sqlQuery(con, "SELECT * FROM pnd")
 
 for (row in 1:nrow(pond_geometry)) {
 	query = paste(
@@ -109,14 +145,12 @@ insert_fert = TRUE
 
 prjDb = paste(projectDir, "/", basename(projectDir), ".mdb", sep="")
 swatDb = paste(projectDir, "SWAT2012.mdb", sep="/")
-netDir = "T:/Projects/Wisconsin_River/Model_Inputs/SWAT_Inputs/LandCoverLandManagement"
-crosswalk_file = paste(netDir, "landuse_operation_crosswalk.csv", sep="/")
 
 # Read in all necessary tables
 
-crosswalk = read.csv(crosswalk_file)             # for defaults:
+crosswalk = read.csv(lu_op_xwalk_file)             # for defaults:
                                                 # OpSchedules_fert.mbd
-con_updates = odbcConnectAccess(paste(netDir, "OpSchedules_fert_3Cuts_later.mdb", sep="/"))
+con_updates = odbcConnectAccess(op_db_file)
 opSched = sqlFetch(con_updates, "OpSchedules")
 fert = sqlFetch(con_updates, "fert")
 close(con_updates)
@@ -149,7 +183,7 @@ con_mgt2 = odbcConnectAccess(prjDb)
 oidStart = 1
 for (row in 1:nrow(mgt1)) {
     row_data = mgt1[row,]
-    print(paste(as.character(row_data$SUBBASIN), as.character(row_data$HRU)))
+    print(paste('Subbasin:',as.character(row_data$SUBBASIN),'hru:', as.character(row_data$HRU)))
     lu = as.character(row_data$LANDUSE)
     opCode = unique(as.character(crosswalk$OPCODE[crosswalk$LANDUSE == lu]))
     if (substr(opCode, 1, 1) == "3" & substr(opCode, 4, 4) == "c") {
